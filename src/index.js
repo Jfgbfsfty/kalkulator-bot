@@ -2,31 +2,36 @@ require('dotenv').config();
 const { Client, GatewayIntentBits, ActivityType, REST, Routes, SlashCommandBuilder } = require('discord.js');
 const express = require('express');
 const http = require('http');
+const https = require('https');
 
 // ===========================
 // HELPER: KOMUNIKACJA Z BACKENDEM
 // ===========================
 /**
- * Wysyła żądanie HTTP do backendu i zwraca odpowiedź.
- * Używane do: duty sessions, audit logs.
+ * Wysyła żądanie HTTP/HTTPS do backendu i zwraca odpowiedź.
+ * Automatycznie używa https gdy BACKEND_URL zaczyna się od https://
+ * Stripuje cudzysłowy dodawane przez Railway do zmiennych środowiskowych.
  */
 const callBackend = (method, path, data = null) => {
   return new Promise((resolve, reject) => {
-    const backendBase = process.env.BACKEND_URL || 'http://localhost:5000';
+    const backendBase = (process.env.BACKEND_URL || 'http://localhost:5000').replace(/^["']|["']$/g, '');
+    const secret = (process.env.BOT_API_SECRET || '').replace(/^["']|["']$/g, '');
     const parsed = new URL(backendBase);
+    const isHttps = parsed.protocol === 'https:';
+    const transport = isHttps ? https : http;
     const body = data ? JSON.stringify(data) : null;
     const options = {
       hostname: parsed.hostname,
-      port: parseInt(parsed.port) || 5000,
+      port: parseInt(parsed.port) || (isHttps ? 443 : 80),
       path,
       method: method.toUpperCase(),
       headers: {
         'Content-Type': 'application/json',
-        'x-bot-secret': process.env.BOT_API_SECRET,
+        'x-bot-secret': secret,
         ...(body ? { 'Content-Length': Buffer.byteLength(body) } : {}),
       },
     };
-    const req = http.request(options, (res) => {
+    const req = transport.request(options, (res) => {
       let responseData = '';
       res.on('data', (chunk) => (responseData += chunk));
       res.on('end', () => {
