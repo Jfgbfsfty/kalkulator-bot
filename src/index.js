@@ -176,8 +176,9 @@ app.post('/api/remove-role', async (req, res) => {
  * Body: { discordUserId, fromRank, toRank }
  */
 const RANK_ROLE_MAP = {
-  'Kadet':    'DISCORD_ROLE_KADET',
+  'Drógówka': 'DISCORD_ROLE_DROGOWKA',
   'Drogówka': 'DISCORD_ROLE_DROGOWKA',
+  'Kadet':    'DISCORD_ROLE_KADET',
   'Sierżant': 'DISCORD_ROLE_SIERZANT',
   'Z-szef':   'DISCORD_ROLE_ZSZEF',
   'Szef':     'DISCORD_ROLE_SZEF',
