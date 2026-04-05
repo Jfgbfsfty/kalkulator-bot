@@ -336,6 +336,31 @@ app.post('/api/send-cv', async (req, res) => {
   }
 });
 
+/**
+ * POST /api/send-audit
+ * Wysyła embed audytu na kanał DISCORD_AUDIT_CHANNEL_ID.
+ * Wywoływane automatycznie przez backend po każdej ważnej akcji.
+ */
+app.post('/api/send-audit', async (req, res) => {
+  const { embed } = req.body;
+  const channelId = process.env.DISCORD_AUDIT_CHANNEL_ID;
+  if (!channelId) {
+    return res.status(400).json({ success: false, message: 'DISCORD_AUDIT_CHANNEL_ID nie ustawiony w .env' });
+  }
+  try {
+    const channel = await client.channels.fetch(channelId);
+    if (!channel?.isTextBased()) {
+      return res.status(404).json({ success: false, message: 'Kanał audytu nie znaleziony' });
+    }
+    await channel.send({ embeds: [embed] });
+    console.log(`🔍 Wysłano log audytu: ${embed?.title || '—'}`);
+    res.json({ success: true });
+  } catch (err) {
+    console.error(`❌ send-audit: ${err.message}`);
+    res.status(500).json({ success: false, message: `Błąd: ${err.message}` });
+  }
+});
+
 // ===========================
 // EVENTY DISCORD
 // ===========================
