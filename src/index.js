@@ -100,7 +100,8 @@ app.use(express.json({ limit: '1mb' }));
 // Weryfikacja sekretu API – wszystkie requesty muszą mieć poprawny sekret
 const verifySecret = (req, res, next) => {
   const secret = req.headers['x-bot-secret'];
-  if (!secret || secret !== process.env.BOT_API_SECRET) {
+  const expected = (process.env.BOT_API_SECRET || '').replace(/^["']|["']$/g, '');
+  if (!secret || secret !== expected) {
     return res.status(401).json({ success: false, message: 'Nieautoryzowany dostęp do Bot API' });
   }
   next();
@@ -454,14 +455,53 @@ client.on('interactionCreate', async (interaction) => {
       const sessionTime = formatMinutes(result.durationMinutes || 0);
       const totalTime = formatMinutes(result.totalMinutes || 0);
 
+      // Wykryj stopień gracza z ról Discord (od najwyższego)
+      const RANK_PRIORITY = ['Szef', 'Z-szef', 'Sierżant', 'Kadet', 'Drogówka'];
+      let detectedRank = null;
+      try {
+        const member = await guild.members.fetch(user.id);
+        for (const rankName of RANK_PRIORITY) {
+          const envKey = RANK_ROLE_MAP[rankName];
+          if (!envKey) continue;
+          const roleId = (process.env[envKey] || '').replace(/^["']|["']$/g, '');
+          if (roleId && member.roles.cache.has(roleId)) {
+            detectedRank = rankName;
+            break;
+          }
+        }
+      } catch (e) {
+        console.error(`⚠️ Błąd pobierania ról gracza: ${e.message}`);
+      }
+
+      // Oblicz zarobki na podstawie stawki godzinowej
+      let earnedStr = null;
+      if (detectedRank) {
+        try {
+          const salaryRes = await callBackend('GET', '/api/salary-config');
+          const rateEntry = salaryRes.data?.find((r) => r.rankName === detectedRank);
+          const hourlyRate = rateEntry?.hourlyRate || 0;
+          if (hourlyRate > 0) {
+            const earned = Math.round((result.durationMinutes / 60) * hourlyRate);
+            earnedStr = `${earned.toLocaleString('pl-PL')} zł`;
+          }
+        } catch (e) {
+          console.error(`⚠️ Błąd pobierania stawek: ${e.message}`);
+        }
+      }
+
+      const fields = [
+        { name: '⏱️ Czas tej zmiany', value: sessionTime, inline: true },
+        { name: '📊 Łączny czas służby', value: totalTime, inline: true },
+      ];
+      if (earnedStr) {
+        fields.push({ name: '💰 Zarobiono', value: earnedStr, inline: true });
+      }
+
       const embed = {
         color: 0xff4444,
         title: '🔴 Zejście ze służby',
         description: `**${user.username}** zszedł ze służby`,
-        fields: [
-          { name: '⏱️ Czas tej zmiany', value: sessionTime, inline: true },
-          { name: '📊 Łączny czas służby', value: totalTime, inline: true },
-        ],
+        fields,
         timestamp: new Date().toISOString(),
         footer: { text: 'Kalkulator Mandatów | Polskie RP' },
       };
