@@ -387,7 +387,7 @@ app.post('/api/send-dismissal', async (req, res) => {
         // Wyślij DM do gracza
         const dmEmbed = {
           color: 0xff0000,
-          title: '🚫 ZWOLNIENIE ZE SŁUŻBY',
+          title: '🚫 ZWOLNIENIE',
           description: 'Zostałeś zwolniony ze służby w **Kalkulator Mandatów | Polskie RP**.',
           fields: embed?.fields || [],
           timestamp: new Date().toISOString(),
