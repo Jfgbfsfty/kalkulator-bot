@@ -344,7 +344,7 @@ app.post('/api/send-cv', async (req, res) => {
  * Body: { embed, discordUserId }
  */
 app.post('/api/send-dismissal', async (req, res) => {
-  const { embed, discordUserId } = req.body;
+  const { embed, discordUserId, sendToChannel = true } = req.body;
   const channelId = process.env.DISCORD_PROMOTIONS_CHANNEL_ID;
   const errors = [];
   let dmSent = false;
@@ -389,9 +389,9 @@ app.post('/api/send-dismissal', async (req, res) => {
       }
     }
 
-    // Wyślij embed na kanał awansów/degradacji
+    // Wyślij embed na kanał awansów/degradacji (jeśli włączone)
     let messageId = null;
-    if (channelId) {
+    if (sendToChannel && channelId) {
       try {
         const channel = await client.channels.fetch(channelId);
         if (channel?.isTextBased()) {
