@@ -299,7 +299,7 @@ app.get('/api/guild-roles', async (req, res) => {
  * Wysyła awans/degradację jako embed na kanał promocji
  */
 app.post('/api/send-promotion', async (req, res) => {
-  const { embed } = req.body;
+  const { embed, discordUserId } = req.body;
   const channelId = process.env.DISCORD_PROMOTIONS_CHANNEL_ID;
   if (!channelId) return res.status(400).json({ success: false, message: 'DISCORD_PROMOTIONS_CHANNEL_ID nie ustawiony w .env' });
 
@@ -307,7 +307,9 @@ app.post('/api/send-promotion', async (req, res) => {
     const channel = await client.channels.fetch(channelId);
     if (!channel?.isTextBased()) return res.status(404).json({ success: false, message: 'Kanał promocji nie znaleziony' });
 
-    const msg = await channel.send({ embeds: [embed] });
+    const payload = { embeds: [embed] };
+    if (discordUserId) payload.content = `<@${discordUserId}>`;
+    const msg = await channel.send(payload);
     console.log(`🏅 Wysłano awans/degradację na Discord`);
     res.json({ success: true, messageId: msg.id });
   } catch (err) {
@@ -345,7 +347,7 @@ app.post('/api/send-cv', async (req, res) => {
  */
 app.post('/api/send-dismissal', async (req, res) => {
   const { embed, discordUserId, sendToChannel = true } = req.body;
-  const channelId = process.env.DISCORD_PROMOTIONS_CHANNEL_ID;
+  const channelId = process.env.DISCORD_DISMISSALS_CHANNEL_ID;
   const errors = [];
   let dmSent = false;
   let roleRemoved = false;
@@ -389,13 +391,15 @@ app.post('/api/send-dismissal', async (req, res) => {
       }
     }
 
-    // Wyślij embed na kanał awansów/degradacji (jeśli włączone)
+    // Wyślij embed na kanał zwolnień (jeśli włączone)
     let messageId = null;
     if (sendToChannel && channelId) {
       try {
         const channel = await client.channels.fetch(channelId);
         if (channel?.isTextBased()) {
-          const msg = await channel.send({ embeds: [embed] });
+          const payload = { embeds: [embed] };
+          if (discordUserId) payload.content = `<@${discordUserId}>`;
+          const msg = await channel.send(payload);
           messageId = msg.id;
         }
       } catch (chanErr) {
