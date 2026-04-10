@@ -339,6 +339,81 @@ app.post('/api/send-cv', async (req, res) => {
 });
 
 /**
+ * POST /api/send-dismissal
+ * Wystawia zwolnienie: usuwa wszystkie role stopnia z gracza, wysyła DM i embed na kanał awansów.
+ * Body: { embed, discordUserId }
+ */
+app.post('/api/send-dismissal', async (req, res) => {
+  const { embed, discordUserId } = req.body;
+  const channelId = process.env.DISCORD_PROMOTIONS_CHANNEL_ID;
+  const errors = [];
+  let dmSent = false;
+  let roleRemoved = false;
+
+  try {
+    const guild = await client.guilds.fetch(process.env.DISCORD_GUILD_ID);
+
+    if (discordUserId) {
+      try {
+        const member = await guild.members.fetch(discordUserId);
+
+        // Usuń wszystkie role stopnia
+        const uniqueEnvKeys = [...new Set(Object.values(RANK_ROLE_MAP))];
+        for (const envKey of uniqueEnvKeys) {
+          const roleId = (process.env[envKey] || '').replace(/^["']|["']$/g, '');
+          if (!roleId) continue;
+          const role = await guild.roles.fetch(roleId).catch(() => null);
+          if (role && member.roles.cache.has(role.id)) {
+            await member.roles.remove(role).catch((e) => errors.push(`Usuwanie roli ${role.name}: ${e.message}`));
+            roleRemoved = true;
+          }
+        }
+
+        // Wyślij DM do gracza
+        const dmEmbed = {
+          color: 0xff0000,
+          title: '🚫 ZWOLNIENIE ZE SŁUŻBY',
+          description: 'Zostałeś zwolniony ze służby w **Kalkulator Mandatów | Polskie RP**.',
+          fields: embed?.fields || [],
+          timestamp: new Date().toISOString(),
+          footer: { text: 'Kalkulator Mandatów | Polskie RP' },
+        };
+        try {
+          await member.send({ embeds: [dmEmbed] });
+          dmSent = true;
+        } catch (dmErr) {
+          errors.push(`DM nieudany (prywatność Discord): ${dmErr.message}`);
+        }
+      } catch (memberErr) {
+        errors.push(`Nie znaleziono członka serwera: ${memberErr.message}`);
+      }
+    }
+
+    // Wyślij embed na kanał awansów/degradacji
+    let messageId = null;
+    if (channelId) {
+      try {
+        const channel = await client.channels.fetch(channelId);
+        if (channel?.isTextBased()) {
+          const msg = await channel.send({ embeds: [embed] });
+          messageId = msg.id;
+        }
+      } catch (chanErr) {
+        errors.push(`Kanał: ${chanErr.message}`);
+      }
+    }
+
+    console.log(`🚫 Zwolnienie wysłane${discordUserId ? ` dla ${discordUserId}` : ''}`);
+    sendAuditLog('BOT_SEND_DISMISSAL', 'system', discordUserId || null, { discordUserId, errors });
+
+    res.json({ success: true, messageId, dmSent, roleRemoved, errors: errors.length ? errors : undefined });
+  } catch (err) {
+    console.error(`❌ send-dismissal: ${err.message}`);
+    res.status(500).json({ success: false, message: `Błąd: ${err.message}` });
+  }
+});
+
+/**
  * POST /api/send-audit
  * Wysyła embed audytu na kanał DISCORD_AUDIT_CHANNEL_ID.
  * Wywoływane automatycznie przez backend po każdej ważnej akcji.
