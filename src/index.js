@@ -371,6 +371,19 @@ app.post('/api/send-dismissal', async (req, res) => {
           }
         }
 
+        // Nadaj rangę Rekrut
+        const rekrutRoleId = (process.env.DISCORD_ROLE_REKRUT || '').replace(/^["']|["']$/g, '');
+        if (rekrutRoleId) {
+          const rekrutRole = await guild.roles.fetch(rekrutRoleId).catch(() => null);
+          if (rekrutRole) {
+            await member.roles.add(rekrutRole).catch((e) => errors.push(`Nadawanie Rekrut: ${e.message}`));
+          } else {
+            errors.push(`Rola Rekrut (${rekrutRoleId}) nie istnieje na serwerze`);
+          }
+        } else {
+          errors.push('DISCORD_ROLE_REKRUT nie ustawiony w .env');
+        }
+
         // Wyślij DM do gracza
         const dmEmbed = {
           color: 0xff0000,
