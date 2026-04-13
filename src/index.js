@@ -341,6 +341,28 @@ app.post('/api/send-cv', async (req, res) => {
 });
 
 /**
+ * POST /api/send-promotion-request
+ * Wysyła wniosek o awans jako embed na dedykowany kanał
+ */
+app.post('/api/send-promotion-request', async (req, res) => {
+  const { embed } = req.body;
+  const channelId = process.env.DISCORD_REQUESTS_CHANNEL_ID;
+  if (!channelId) return res.status(400).json({ success: false, message: 'DISCORD_REQUESTS_CHANNEL_ID nie ustawiony w .env' });
+
+  try {
+    const channel = await client.channels.fetch(channelId);
+    if (!channel?.isTextBased()) return res.status(404).json({ success: false, message: 'Kanał wniosków nie znaleziony' });
+
+    const msg = await channel.send({ embeds: [embed] });
+    console.log(`📋 Wysłano wniosek o awans na Discord`);
+    res.json({ success: true, messageId: msg.id });
+  } catch (err) {
+    console.error(`❌ send-promotion-request: ${err.message}`);
+    res.status(500).json({ success: false, message: `Błąd: ${err.message}` });
+  }
+});
+
+/**
  * POST /api/send-dismissal
  * Wystawia zwolnienie: usuwa wszystkie role stopnia z gracza, wysyła DM i embed na kanał awansów.
  * Body: { embed, discordUserId }
