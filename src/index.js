@@ -743,7 +743,13 @@ client.on('interactionCreate', async (interaction) => {
 
     // ── Akceptuj / Odrzuć CV ──
     if (customId.startsWith('cv_accept_') || customId.startsWith('cv_reject_')) {
-      if (!member.permissions.has(PermissionFlagsBits.ManageGuild)) {
+      const szefRoleId   = (process.env.DISCORD_ROLE_SZEF  || '').replace(/^["']|["']$/g, '');
+      const zszefRoleId  = (process.env.DISCORD_ROLE_ZSZEF || '').replace(/^["']|["']$/g, '');
+      const hasAccess = member.permissions.has(PermissionFlagsBits.ManageGuild)
+        || (szefRoleId  && member.roles.cache.has(szefRoleId))
+        || (zszefRoleId && member.roles.cache.has(zszefRoleId));
+
+      if (!hasAccess) {
         await interaction.reply({ content: '❌ Nie masz uprawnień do rozpatrywania CV.', flags: 64 });
         return;
       }
