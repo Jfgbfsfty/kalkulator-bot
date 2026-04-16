@@ -93,6 +93,45 @@ function saveTicketConfig() {
 let ticketConfig = loadTicketConfig();
 
 // ===========================
+// KONFIGURACJA POWITAŃ
+// ===========================
+const WELCOME_CONFIG_FILE = nodePath.join(__dirname, '..', 'data', 'welcome-config.json');
+
+function loadWelcomeConfig() {
+  try {
+    if (fs.existsSync(WELCOME_CONFIG_FILE)) {
+      return JSON.parse(fs.readFileSync(WELCOME_CONFIG_FILE, 'utf8'));
+    }
+  } catch (e) {
+    console.error('⚠️  Błąd ładowania konfiguracji powitań:', e.message);
+  }
+  return {};
+}
+
+function saveWelcomeConfig() {
+  try {
+    const dir = nodePath.dirname(WELCOME_CONFIG_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(WELCOME_CONFIG_FILE, JSON.stringify(welcomeConfig, null, 2), 'utf8');
+  } catch (e) {
+    console.error('⚠️  Błąd zapisu konfiguracji powitań:', e.message);
+  }
+}
+
+// Zastępuje zmienne w treści wiadomości
+function applyWelcomeVars(template, member) {
+  const guild = member.guild;
+  return template
+    .replace(/\{user\}/gi, `${member}`)
+    .replace(/\{nick\}/gi, member.user.username)
+    .replace(/\{serwer\}/gi, guild.name)
+    .replace(/\{liczba\}/gi, guild.memberCount.toString())
+    .replace(/\{id\}/gi, member.user.id);
+}
+
+let welcomeConfig = loadWelcomeConfig();
+
+// ===========================
 // DEFINICJE KOMEND SLASH
 // ===========================
 const slashCommands = [
@@ -147,6 +186,45 @@ const slashCommands = [
         .addStringOption((opt) =>
           opt.setName('opis').setDescription('Niestandardowy opis embedu').setRequired(false)
         )
+    )
+    .toJSON(),
+  new SlashCommandBuilder()
+    .setName('powitanie')
+    .setDescription('👋 Automatyczne powitanie nowych członków – konfiguracja')
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+    .addSubcommand((sub) =>
+      sub
+        .setName('ustaw')
+        .setDescription('Skonfiguruj kanał i treść powitania')
+        .addChannelOption((opt) =>
+          opt
+            .setName('kanal')
+            .setDescription('Kanał na który bot będzie wysyłać powitania')
+            .addChannelTypes(ChannelType.GuildText)
+            .setRequired(true)
+        )
+        .addStringOption((opt) =>
+          opt
+            .setName('tresc')
+            .setDescription('Treść wiadomości. Zmienne: {user} {nick} {serwer} {liczba} {id}')
+            .setRequired(true)
+        )
+        .addBooleanOption((opt) =>
+          opt
+            .setName('embed')
+            .setDescription('Czy wysłać jako ładny embed? (domyślnie tak)')
+            .setRequired(false)
+        )
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('podglad')
+        .setDescription('Pokaż aktualną konfigurację powitania')
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('wylacz')
+        .setDescription('Wyłącz automatyczne powitanie')
     )
     .toJSON(),
 ];
@@ -916,6 +994,81 @@ client.on('interactionCreate', async (interaction) => {
     }
   }
 
+  // ────────── /powitanie ──────────
+  if (commandName === 'powitanie') {
+    const sub = interaction.options.getSubcommand();
+
+    if (sub === 'ustaw') {
+      const kanal   = interaction.options.getChannel('kanal');
+      const tresc   = interaction.options.getString('tresc');
+      const asEmbed = interaction.options.getBoolean('embed') ?? true;
+
+      welcomeConfig[guild.id] = {
+        channelId: kanal.id,
+        message: tresc,
+        embed: asEmbed,
+        enabled: true,
+      };
+      saveWelcomeConfig();
+
+      // Podgląd z podstawionymi zmiennymi
+      const dummyMember = {
+        guild: { name: guild.name, memberCount: guild.memberCount },
+        user: { username: user.username, id: user.id },
+        toString: () => `<@${user.id}>`,
+      };
+      const preview = applyWelcomeVars(tresc, dummyMember);
+
+      const embed = {
+        color: 0x57f287,
+        title: '✅ Powitanie skonfigurowane',
+        fields: [
+          { name: '📌 Kanał',   value: `${kanal}`, inline: true },
+          { name: '📸 Format',  value: asEmbed ? 'Embed' : 'Zwykła wiadomość', inline: true },
+          { name: '📝 Treść (oryginalna)', value: `\`\`\`${tresc}\`\`\`` },
+          { name: '👁️ Podgląd', value: preview },
+        ],
+        description: 'Dostępne zmienne: `{user}` `{nick}` `{serwer}` `{liczba}` `{id}`',
+        footer: { text: 'Kalkulator Mandatów | Polskie RP' },
+        timestamp: new Date().toISOString(),
+      };
+      await interaction.reply({ embeds: [embed], flags: 64 });
+      return;
+    }
+
+    if (sub === 'podglad') {
+      const cfg = welcomeConfig[guild.id];
+      if (!cfg?.enabled) {
+        await interaction.reply({ content: '❌ Powitanie nie jest skonfigurowane lub jest wyłączone.', flags: 64 });
+        return;
+      }
+      const kanal = guild.channels.cache.get(cfg.channelId);
+      const embed = {
+        color: 0x5865f2,
+        title: '👋 Konfiguracja powitania',
+        fields: [
+          { name: '📌 Kanał',  value: kanal ? `${kanal}` : `ID: ${cfg.channelId}`, inline: true },
+          { name: '📸 Format', value: cfg.embed ? 'Embed' : 'Zwykła wiadomość',    inline: true },
+          { name: '✅ Status', value: 'WŁĄCZONE',                                   inline: true },
+          { name: '📝 Treść',  value: `\`\`\`${cfg.message}\`\`\`` },
+        ],
+        footer: { text: 'Kalkulator Mandatów | Polskie RP' },
+        timestamp: new Date().toISOString(),
+      };
+      await interaction.reply({ embeds: [embed], flags: 64 });
+      return;
+    }
+
+    if (sub === 'wylacz') {
+      if (welcomeConfig[guild.id]) {
+        welcomeConfig[guild.id].enabled = false;
+        saveWelcomeConfig();
+      }
+      await interaction.reply({ content: '✅ Automatyczne powitanie zostało wyłączone.', flags: 64 });
+      return;
+    }
+  }
+
   // ────────── /top ──────────
   if (commandName === 'top') {
     await interaction.deferReply();
@@ -955,6 +1108,33 @@ client.on('interactionCreate', async (interaction) => {
 
 client.on('guildMemberAdd', async (member) => {
   console.log(`👤 Nowy członek: ${member.user.tag}`);
+
+  const cfg = welcomeConfig[member.guild.id];
+  if (!cfg?.enabled || !cfg?.channelId || !cfg?.message) return;
+
+  try {
+    const channel = await client.channels.fetch(cfg.channelId);
+    if (!channel?.isTextBased()) return;
+
+    const text = applyWelcomeVars(cfg.message, member);
+
+    if (cfg.embed) {
+      const welcomeEmbed = {
+        color: 0x5865f2,
+        description: text,
+        thumbnail: { url: member.user.displayAvatarURL({ size: 128 }) },
+        footer: { text: member.guild.name },
+        timestamp: new Date().toISOString(),
+      };
+      await channel.send({ embeds: [welcomeEmbed] });
+    } else {
+      await channel.send(text);
+    }
+
+    console.log(`👋 Wysłano powitanie dla ${member.user.tag}`);
+  } catch (err) {
+    console.error(`❌ Błąd wysyłania powitania: ${err.message}`);
+  }
 });
 
 client.on('error', (err) => {
