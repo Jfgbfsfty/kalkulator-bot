@@ -796,8 +796,35 @@ client.on('interactionCreate', async (interaction) => {
         };
         await interaction.message.edit({ embeds: [updatedEmbed], components: [] });
 
+        // Wyślij DM do kandydata
+        let dmMsg = '';
+        if (result.data?.discordUserId) {
+          try {
+            const candidateMember = await guild.members.fetch(result.data.discordUserId);
+            const dmEmbed = isAccept
+              ? {
+                  color: 0x57f287,
+                  title: '✅ Twoje CV na policję zostało zaakceptowane!',
+                  description: `Witaj w szeregach Wydziału Drogówki **Polskie RP**!\n\nAby otrzymać dostęp do panelu policji, **utwórz ticket** na naszym serwerze Discord klikając przycisk "Otwórz ticket" w odpowiednim kanale.`,
+                  footer: { text: 'Polskie RP – Wydział Drogówki' },
+                  timestamp: new Date().toISOString(),
+                }
+              : {
+                  color: 0xed4245,
+                  title: '❌ Twoje CV na policję zostało odrzucone.',
+                  description: `Dziękujemy za zainteresowanie Wydziałem Drogówki **Polskie RP**.\n\nNiestety tym razem Twoje CV nie zostało przyjęte. Możesz spróbować ponownie za jakiś czas.`,
+                  footer: { text: 'Polskie RP – Wydział Drogówki' },
+                  timestamp: new Date().toISOString(),
+                };
+            await candidateMember.send({ embeds: [dmEmbed] });
+            dmMsg = ' Wysłano DM do kandydata.';
+          } catch (e) {
+            dmMsg = ' ⚠️ Nie udało się wysłać DM (kandydat może mieć zablokowane wiadomości prywatne).';
+          }
+        }
+
         await interaction.editReply({
-          content: `${isAccept ? '✅ CV zaakceptowane' : '❌ CV odrzucone'}.${roleMsg}`,
+          content: `${isAccept ? '✅ CV zaakceptowane' : '❌ CV odrzucone'}.${roleMsg}${dmMsg}`,
         });
       } catch (err) {
         console.error(`❌ cv button: ${err.message}`);
