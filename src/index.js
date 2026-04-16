@@ -132,6 +132,34 @@ function applyWelcomeVars(template, member) {
 let welcomeConfig = loadWelcomeConfig();
 
 // ===========================
+// KONFIGURACJA AUTOROLE
+// ===========================
+const AUTOROLE_CONFIG_FILE = nodePath.join(__dirname, '..', 'data', 'autorole-config.json');
+
+function loadAutoroleConfig() {
+  try {
+    if (fs.existsSync(AUTOROLE_CONFIG_FILE)) {
+      return JSON.parse(fs.readFileSync(AUTOROLE_CONFIG_FILE, 'utf8'));
+    }
+  } catch (e) {
+    console.error('⚠️  Błąd ładowania konfiguracji autorole:', e.message);
+  }
+  return {};
+}
+
+function saveAutoroleConfig() {
+  try {
+    const dir = nodePath.dirname(AUTOROLE_CONFIG_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(AUTOROLE_CONFIG_FILE, JSON.stringify(autoroleConfig, null, 2), 'utf8');
+  } catch (e) {
+    console.error('⚠️  Błąd zapisu konfiguracji autorole:', e.message);
+  }
+}
+
+let autoroleConfig = loadAutoroleConfig();
+
+// ===========================
 // DEFINICJE KOMEND SLASH
 // ===========================
 const slashCommands = [
@@ -225,6 +253,41 @@ const slashCommands = [
       sub
         .setName('wylacz')
         .setDescription('Wyłącz automatyczne powitanie')
+    )
+    .toJSON(),
+  new SlashCommandBuilder()
+    .setName('autorole')
+    .setDescription('🎭 Automatyczna rola przy dołączeniu do serwera')
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .addSubcommand((sub) =>
+      sub
+        .setName('ustaw')
+        .setDescription('Ustaw rolę, która będzie nadawana każdemu nowemu członkowi')
+        .addRoleOption((opt) =>
+          opt
+            .setName('rola')
+            .setDescription('Rola do automatycznego nadawania')
+            .setRequired(true)
+        )
+    )
+    .addSubcommand((sub) =>
+      sub.setName('pokaz').setDescription('Pokaż aktualnie ustawioną autorole')
+    )
+    .addSubcommand((sub) =>
+      sub.setName('wylacz').setDescription('Wyłącz automatyczne nadawanie roli')
+    )
+    .toJSON(),
+  new SlashCommandBuilder()
+    .setName('clear')
+    .setDescription('🧹 Usuwa wiadomości z bieżącego kanału')
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .addIntegerOption((opt) =>
+      opt
+        .setName('liczba')
+        .setDescription('Liczba wiadomości do usunięcia (1–100)')
+        .setRequired(true)
+        .setMinValue(1)
+        .setMaxValue(100)
     )
     .toJSON(),
 ];
@@ -1069,6 +1132,84 @@ client.on('interactionCreate', async (interaction) => {
     }
   }
 
+  // ────────── /autorole ──────────
+  if (commandName === 'autorole') {
+    const sub = interaction.options.getSubcommand();
+
+    if (sub === 'ustaw') {
+      const rola = interaction.options.getRole('rola');
+
+      if (rola.managed) {
+        await interaction.reply({ content: '❌ Nie można używać ról zarządzanych przez boty/integracje.', flags: 64 });
+        return;
+      }
+
+      autoroleConfig[guild.id] = { roleId: rola.id, enabled: true };
+      saveAutoroleConfig();
+
+      await interaction.reply({
+        embeds: [{
+          color: 0x57f287,
+          title: '✅ Autorole ustawiona',
+          description: `Każdy nowy członek serwera automatycznie otrzyma rolę ${rola}.`,
+          footer: { text: 'Kalkulator Mandatów | Polskie RP' },
+          timestamp: new Date().toISOString(),
+        }],
+        flags: 64,
+      });
+      return;
+    }
+
+    if (sub === 'pokaz') {
+      const cfg = autoroleConfig[guild.id];
+      if (!cfg?.enabled || !cfg?.roleId) {
+        await interaction.reply({ content: '❌ Autorole nie jest skonfigurowane.', flags: 64 });
+        return;
+      }
+      const rola = guild.roles.cache.get(cfg.roleId);
+      await interaction.reply({
+        embeds: [{
+          color: 0x5865f2,
+          title: '🎭 Aktualna autorole',
+          fields: [
+            { name: 'Rola',   value: rola ? `${rola}` : `ID: ${cfg.roleId}`, inline: true },
+            { name: 'Status', value: '✅ WŁĄCZONE',                           inline: true },
+          ],
+          footer: { text: 'Kalkulator Mandatów | Polskie RP' },
+          timestamp: new Date().toISOString(),
+        }],
+        flags: 64,
+      });
+      return;
+    }
+
+    if (sub === 'wylacz') {
+      if (autoroleConfig[guild.id]) {
+        autoroleConfig[guild.id].enabled = false;
+        saveAutoroleConfig();
+      }
+      await interaction.reply({ content: '✅ Autorole zostało wyłączone.', flags: 64 });
+      return;
+    }
+  }
+
+  // ────────── /clear ──────────
+  if (commandName === 'clear') {
+    const liczba = interaction.options.getInteger('liczba');
+
+    await interaction.deferReply({ flags: 64 });
+
+    try {
+      const deleted = await interaction.channel.bulkDelete(liczba, true); // true = ignoruje wiadomości >14 dni
+      await interaction.editReply({ content: `🧹 Usunięto **${deleted.size}** wiadomości.` });
+      console.log(`🧹 ${user.tag} usunął ${deleted.size} wiadomości na kanale ${interaction.channel.name}`);
+    } catch (err) {
+      console.error(`❌ /clear: ${err.message}`);
+      await interaction.editReply({ content: `❌ Błąd: ${err.message}` });
+    }
+    return;
+  }
+
   // ────────── /top ──────────
   if (commandName === 'top') {
     await interaction.deferReply();
@@ -1109,16 +1250,31 @@ client.on('interactionCreate', async (interaction) => {
 client.on('guildMemberAdd', async (member) => {
   console.log(`👤 Nowy członek: ${member.user.tag}`);
 
-  const cfg = welcomeConfig[member.guild.id];
-  if (!cfg?.enabled || !cfg?.channelId || !cfg?.message) return;
+  // ─── Autorole ───
+  const arCfg = autoroleConfig[member.guild.id];
+  if (arCfg?.enabled && arCfg?.roleId) {
+    try {
+      const role = await member.guild.roles.fetch(arCfg.roleId);
+      if (role) {
+        await member.roles.add(role);
+        console.log(`🎭 Nadano autorole "${role.name}" dla ${member.user.tag}`);
+      }
+    } catch (err) {
+      console.error(`❌ Błąd nadawania autorole: ${err.message}`);
+    }
+  }
+
+  // ─── Powitanie ───
+  const wCfg = welcomeConfig[member.guild.id];
+  if (!wCfg?.enabled || !wCfg?.channelId || !wCfg?.message) return;
 
   try {
-    const channel = await client.channels.fetch(cfg.channelId);
+    const channel = await client.channels.fetch(wCfg.channelId);
     if (!channel?.isTextBased()) return;
 
-    const text = applyWelcomeVars(cfg.message, member);
+    const text = applyWelcomeVars(wCfg.message, member);
 
-    if (cfg.embed) {
+    if (wCfg.embed) {
       const welcomeEmbed = {
         color: 0x5865f2,
         description: text,
