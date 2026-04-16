@@ -535,7 +535,7 @@ app.post('/api/send-promotion', async (req, res) => {
  * Wysyła zgłoszenie CV jako embed na kanał CV
  */
 app.post('/api/send-cv', async (req, res) => {
-  const { embed } = req.body;
+  const { embed, cvId, discordUserId } = req.body;
   const channelId = process.env.DISCORD_CV_CHANNEL_ID;
   if (!channelId) return res.status(400).json({ success: false, message: 'DISCORD_CV_CHANNEL_ID nie ustawiony w .env' });
 
@@ -543,8 +543,23 @@ app.post('/api/send-cv', async (req, res) => {
     const channel = await client.channels.fetch(channelId);
     if (!channel?.isTextBased()) return res.status(404).json({ success: false, message: 'Kanał CV nie znaleziony' });
 
-    const msg = await channel.send({ embeds: [embed] });
-    console.log(`📄 Wysłano CV na Discord`);
+    const components = [];
+    if (cvId) {
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`cv_accept_${cvId}`)
+          .setLabel('✅ Akceptuj')
+          .setStyle(ButtonStyle.Success),
+        new ButtonBuilder()
+          .setCustomId(`cv_reject_${cvId}`)
+          .setLabel('❌ Odrzuć')
+          .setStyle(ButtonStyle.Danger)
+      );
+      components.push(row);
+    }
+
+    const msg = await channel.send({ embeds: [embed], components });
+    console.log(`📄 Wysłano CV na Discord (cvId: ${cvId || '—'})`);
     res.json({ success: true, messageId: msg.id });
   } catch (err) {
     console.error(`❌ send-cv: ${err.message}`);
@@ -726,6 +741,65 @@ client.on('interactionCreate', async (interaction) => {
   if (interaction.isButton()) {
     const { customId, user, guild, channel, member } = interaction;
 
+    // ── Akceptuj / Odrzuć CV ──
+    if (customId.startsWith('cv_accept_') || customId.startsWith('cv_reject_')) {
+      if (!member.permissions.has(PermissionFlagsBits.ManageGuild)) {
+        await interaction.reply({ content: '❌ Nie masz uprawnień do rozpatrywania CV.', flags: 64 });
+        return;
+      }
+
+      const isAccept = customId.startsWith('cv_accept_');
+      const cvId = customId.replace(/^cv_(accept|reject)_/, '');
+      await interaction.deferReply({ flags: 64 });
+
+      try {
+        const result = await callBackend('PUT', `/api/cv/${cvId}/bot-review`, {
+          status: isAccept ? 'ZAAKCEPTOWANE' : 'ODRZUCONE',
+          reviewedBy: user.tag,
+        });
+
+        if (!result.success) {
+          await interaction.editReply({ content: `❌ Błąd: ${result.message}` });
+          return;
+        }
+
+        // Jeśli zaakceptowane i jest discordUserId → nadaj rolę Drogówka
+        let roleMsg = '';
+        if (isAccept && result.data?.discordUserId) {
+          const drogowkaRoleId = (process.env.DISCORD_ROLE_DROGOWKA || '').replace(/^["']|["']$/g, '');
+          if (drogowkaRoleId) {
+            try {
+              const cvMember = await guild.members.fetch(result.data.discordUserId);
+              const role = await guild.roles.fetch(drogowkaRoleId);
+              if (role) {
+                await cvMember.roles.add(role);
+                roleMsg = ` Nadano rolę **${role.name}** dla <@${result.data.discordUserId}>.`;
+              }
+            } catch (e) {
+              roleMsg = ` ⚠️ Nie udało się nadać roli: ${e.message}`;
+            }
+          }
+        }
+
+        // Zaktualizuj embed – usuń przyciski, zmień kolor i stopkę
+        const originalEmbed = interaction.message.embeds[0];
+        const updatedEmbed = {
+          ...originalEmbed.data,
+          color: isAccept ? 0x57f287 : 0xed4245,
+          footer: { text: `${isAccept ? '✅ Zaakceptowane' : '❌ Odrzucone'} przez ${user.tag}` },
+        };
+        await interaction.message.edit({ embeds: [updatedEmbed], components: [] });
+
+        await interaction.editReply({
+          content: `${isAccept ? '✅ CV zaakceptowane' : '❌ CV odrzucone'}.${roleMsg}`,
+        });
+      } catch (err) {
+        console.error(`❌ cv button: ${err.message}`);
+        await interaction.editReply({ content: `❌ Błąd: ${err.message}` });
+      }
+      return;
+    }
+
     // ── Otwórz ticket ──
     if (customId === 'ticket_open') {
       const cfg = ticketConfig[guild.id];
@@ -824,9 +898,7 @@ client.on('interactionCreate', async (interaction) => {
     if (customId === 'ticket_close') {
       const cfg = ticketConfig[guild.id];
       const hasSupportRole = cfg?.supportRoleId && member.roles.cache.has(cfg.supportRoleId);
-      const isTicketOwner = cfg?.openTickets && Object.entries(cfg.openTickets).some(
-        ([uid, cid]) => cid === channel.id
-      );
+      const isTicketOwner = cfg?.openTickets?.[user.id] === channel.id;
 
       if (!hasSupportRole && !isTicketOwner) {
         await interaction.reply({ content: '❌ Nie masz uprawnień do zamknięcia tego ticketu.', flags: 64 });
