@@ -1,8 +1,10 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, ActivityType, REST, Routes, SlashCommandBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, ActivityType, REST, Routes, SlashCommandBuilder, PermissionFlagsBits, ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const express = require('express');
 const http = require('http');
 const https = require('https');
+const fs = require('fs');
+const nodePath = require('path');
 
 // ===========================
 // HELPER: KOMUNIKACJA Z BACKENDEM
@@ -63,6 +65,34 @@ const formatMinutes = (mins) => {
 };
 
 // ===========================
+// KONFIGURACJA TICKETÓW
+// ===========================
+const TICKET_CONFIG_FILE = nodePath.join(__dirname, '..', 'data', 'ticket-config.json');
+
+function loadTicketConfig() {
+  try {
+    if (fs.existsSync(TICKET_CONFIG_FILE)) {
+      return JSON.parse(fs.readFileSync(TICKET_CONFIG_FILE, 'utf8'));
+    }
+  } catch (e) {
+    console.error('⚠️  Błąd ładowania konfiguracji ticketów:', e.message);
+  }
+  return {};
+}
+
+function saveTicketConfig() {
+  try {
+    const dir = nodePath.dirname(TICKET_CONFIG_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(TICKET_CONFIG_FILE, JSON.stringify(ticketConfig, null, 2), 'utf8');
+  } catch (e) {
+    console.error('⚠️  Błąd zapisu konfiguracji ticketów:', e.message);
+  }
+}
+
+let ticketConfig = loadTicketConfig();
+
+// ===========================
 // DEFINICJE KOMEND SLASH
 // ===========================
 const slashCommands = [
@@ -77,6 +107,47 @@ const slashCommands = [
   new SlashCommandBuilder()
     .setName('top')
     .setDescription('🏆 Pokaż ranking czasu służby')
+    .toJSON(),
+  new SlashCommandBuilder()
+    .setName('ticket')
+    .setDescription('🎫 System ticketów – konfiguracja i zarządzanie')
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+    .addSubcommand((sub) =>
+      sub
+        .setName('setup')
+        .setDescription('Skonfiguruj system ticketów dla serwera')
+        .addChannelOption((opt) =>
+          opt
+            .setName('kanal')
+            .setDescription('Kanał z panelem – tu pojawi się przycisk otwierania ticketu')
+            .addChannelTypes(ChannelType.GuildText)
+            .setRequired(true)
+        )
+        .addRoleOption((opt) =>
+          opt
+            .setName('rola')
+            .setDescription('Rola obsługi – będzie widzieć wszystkie tickety')
+            .setRequired(true)
+        )
+        .addChannelOption((opt) =>
+          opt
+            .setName('kategoria')
+            .setDescription('Kategoria kanałów w której będą tworzone tickety (opcjonalnie)')
+            .addChannelTypes(ChannelType.GuildCategory)
+            .setRequired(false)
+        )
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('panel')
+        .setDescription('Wyślij panel z przyciskiem otwierania ticketu do skonfigurowanego kanału')
+        .addStringOption((opt) =>
+          opt.setName('tytul').setDescription('Niestandardowy tytuł embedu').setRequired(false)
+        )
+        .addStringOption((opt) =>
+          opt.setName('opis').setDescription('Niestandardowy opis embedu').setRequired(false)
+        )
+    )
     .toJSON(),
 ];
 
@@ -510,6 +581,142 @@ client.once('ready', async () => {
 // KOMENDY SLASH: /on /off /top
 // ===========================
 client.on('interactionCreate', async (interaction) => {
+  // ────────── PRZYCISKI ──────────
+  if (interaction.isButton()) {
+    const { customId, user, guild, channel, member } = interaction;
+
+    // ── Otwórz ticket ──
+    if (customId === 'ticket_open') {
+      const cfg = ticketConfig[guild.id];
+      if (!cfg?.supportRoleId) {
+        await interaction.reply({ content: '❌ System ticketów nie jest skonfigurowany. Użyj `/ticket setup`.', flags: 64 });
+        return;
+      }
+
+      // Sprawdź czy użytkownik ma już otwarty ticket
+      if (cfg.openTickets?.[user.id]) {
+        const existing = guild.channels.cache.get(cfg.openTickets[user.id]);
+        if (existing) {
+          await interaction.reply({ content: `❌ Masz już otwarty ticket: ${existing}`, flags: 64 });
+          return;
+        }
+        // Kanał nie istnieje – wyczyść stary wpis
+        delete cfg.openTickets[user.id];
+        saveTicketConfig();
+      }
+
+      await interaction.deferReply({ flags: 64 });
+
+      try {
+        // Bezpieczna nazwa kanału (tylko litery, cyfry, myślniki)
+        const safeName = user.username.toLowerCase().replace(/[^a-z0-9]/g, '-').slice(0, 20);
+        const channelName = `ticket-${safeName}`;
+
+        const permissionOverwrites = [
+          {
+            id: guild.id, // @everyone
+            deny: [PermissionFlagsBits.ViewChannel],
+          },
+          {
+            id: user.id,
+            allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.AttachFiles],
+          },
+          {
+            id: cfg.supportRoleId,
+            allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageMessages, PermissionFlagsBits.AttachFiles],
+          },
+          {
+            id: client.user.id, // bot
+            allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels],
+          },
+        ];
+
+        const ticketChannel = await guild.channels.create({
+          name: channelName,
+          type: ChannelType.GuildText,
+          parent: cfg.categoryId || null,
+          permissionOverwrites,
+          reason: `Ticket otworzył ${user.tag}`,
+        });
+
+        // Zapisz otwarty ticket
+        if (!cfg.openTickets) cfg.openTickets = {};
+        cfg.openTickets[user.id] = ticketChannel.id;
+        saveTicketConfig();
+
+        // Embed powitalny w kanale ticketu
+        const welcomeEmbed = {
+          color: 0x5865f2,
+          title: '🎫 Ticket otwarty',
+          description: `Cześć ${user}, dziękujemy za kontakt!\n\nOpisz swój problem lub pytanie, a obsługa odpowie najszybciej jak to możliwe.`,
+          fields: [
+            { name: '👤 Zgłaszający', value: `${user} (${user.tag})`, inline: true },
+            { name: '📅 Data', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: true },
+          ],
+          footer: { text: 'Kalkulator Mandatów | Polskie RP' },
+          timestamp: new Date().toISOString(),
+        };
+
+        const closeRow = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId('ticket_close')
+            .setLabel('🔒 Zamknij ticket')
+            .setStyle(ButtonStyle.Danger)
+        );
+
+        const supportRole = guild.roles.cache.get(cfg.supportRoleId);
+        await ticketChannel.send({
+          content: `${user} | ${supportRole ?? ''}`,
+          embeds: [welcomeEmbed],
+          components: [closeRow],
+        });
+
+        await interaction.editReply({ content: `✅ Twój ticket został otwarty: ${ticketChannel}` });
+      } catch (err) {
+        console.error(`❌ ticket_open: ${err.message}`);
+        await interaction.editReply({ content: `❌ Nie udało się utworzyć ticketu: ${err.message}` });
+      }
+      return;
+    }
+
+    // ── Zamknij ticket ──
+    if (customId === 'ticket_close') {
+      const cfg = ticketConfig[guild.id];
+      const hasSupportRole = cfg?.supportRoleId && member.roles.cache.has(cfg.supportRoleId);
+      const isTicketOwner = cfg?.openTickets && Object.entries(cfg.openTickets).some(
+        ([uid, cid]) => cid === channel.id
+      );
+
+      if (!hasSupportRole && !isTicketOwner) {
+        await interaction.reply({ content: '❌ Nie masz uprawnień do zamknięcia tego ticketu.', flags: 64 });
+        return;
+      }
+
+      await interaction.reply({ content: '🔒 Zamykam ticket...' });
+
+      // Usuń wpis z otwartych ticketów
+      if (cfg?.openTickets) {
+        for (const [uid, cid] of Object.entries(cfg.openTickets)) {
+          if (cid === channel.id) {
+            delete cfg.openTickets[uid];
+            break;
+          }
+        }
+        saveTicketConfig();
+      }
+
+      // Poczekaj chwilę i usuń kanał
+      setTimeout(() => {
+        channel.delete(`Ticket zamknięty przez ${user.tag}`).catch((e) =>
+          console.error(`❌ Błąd usuwania kanału ticketu: ${e.message}`)
+        );
+      }, 3000);
+      return;
+    }
+
+    return;
+  }
+
   if (!interaction.isChatInputCommand()) return;
 
   const { commandName, user, guild } = interaction;
@@ -632,6 +839,81 @@ client.on('interactionCreate', async (interaction) => {
       await interaction.editReply('❌ Błąd połączenia z serwerem. Spróbuj ponownie.');
     }
     return;
+  }
+
+  // ────────── /ticket ──────────
+  if (commandName === 'ticket') {
+    const sub = interaction.options.getSubcommand();
+
+    if (sub === 'setup') {
+      const kanal = interaction.options.getChannel('kanal');
+      const rola  = interaction.options.getRole('rola');
+      const kategoria = interaction.options.getChannel('kategoria');
+
+      ticketConfig[guild.id] = {
+        ...(ticketConfig[guild.id] || {}),
+        supportRoleId: rola.id,
+        panelChannelId: kanal.id,
+        categoryId: kategoria?.id || null,
+        openTickets: ticketConfig[guild.id]?.openTickets || {},
+      };
+      saveTicketConfig();
+
+      const embed = {
+        color: 0x57f287,
+        title: '✅ System ticketów skonfigurowany',
+        fields: [
+          { name: '📌 Kanał panelu', value: `${kanal}`, inline: true },
+          { name: '🛡️ Rola obsługi', value: `${rola}`, inline: true },
+          { name: '📂 Kategoria', value: kategoria ? `${kategoria.name}` : 'domyślna', inline: true },
+        ],
+        description: 'Użyj `/ticket panel` żeby wysłać panel z przyciskiem do skonfigurowanego kanału.',
+        footer: { text: 'Kalkulator Mandatów | Polskie RP' },
+        timestamp: new Date().toISOString(),
+      };
+      await interaction.reply({ embeds: [embed], flags: 64 });
+      return;
+    }
+
+    if (sub === 'panel') {
+      const cfg = ticketConfig[guild.id];
+      if (!cfg?.panelChannelId || !cfg?.supportRoleId) {
+        await interaction.reply({ content: '❌ System ticketów nie jest skonfigurowany. Najpierw użyj `/ticket setup`.', flags: 64 });
+        return;
+      }
+
+      const tytul = interaction.options.getString('tytul') || '🎫 Wsparcie – Kalkulator Mandatów';
+      const opis  = interaction.options.getString('opis')  || 'Kliknij przycisk poniżej, aby otworzyć ticket.\nNasz zespół obsługi odpowie najszybciej jak to możliwe.';
+
+      const panelEmbed = {
+        color: 0x5865f2,
+        title: tytul,
+        description: opis,
+        footer: { text: 'Kalkulator Mandatów | Polskie RP' },
+        timestamp: new Date().toISOString(),
+      };
+
+      const openRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId('ticket_open')
+          .setLabel('🎫 Otwórz ticket')
+          .setStyle(ButtonStyle.Primary)
+      );
+
+      try {
+        const panelChannel = await client.channels.fetch(cfg.panelChannelId);
+        if (!panelChannel?.isTextBased()) {
+          await interaction.reply({ content: '❌ Skonfigurowany kanał panelu jest niedostępny.', flags: 64 });
+          return;
+        }
+        await panelChannel.send({ embeds: [panelEmbed], components: [openRow] });
+        await interaction.reply({ content: `✅ Panel wysłany na ${panelChannel}`, flags: 64 });
+      } catch (err) {
+        console.error(`❌ /ticket panel: ${err.message}`);
+        await interaction.reply({ content: `❌ Błąd: ${err.message}`, flags: 64 });
+      }
+      return;
+    }
   }
 
   // ────────── /top ──────────
