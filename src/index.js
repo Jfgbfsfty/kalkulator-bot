@@ -387,6 +387,7 @@ app.post('/api/remove-role', async (req, res) => {
  * POST /api/swap-roles
  * Zamienia rolę stopnia gracza: usuwa starą, dodaje nową
  * Body: { discordUserId, fromRank, toRank }
+ *    lub { discordUserId, autoDetect: true } — bot sam wykrywa rangę i nadaje następną (max Z-szef)
  */
 const RANK_ROLE_MAP = {
   'Drógówka': 'DISCORD_ROLE_DROGOWKA',
@@ -397,15 +398,69 @@ const RANK_ROLE_MAP = {
   'Szef':     'DISCORD_ROLE_SZEF',
 };
 
-app.post('/api/swap-roles', async (req, res) => {
-  const { discordUserId, fromRank, toRank } = req.body;
+// Kolejność rang — używana do auto-wykrywania
+const RANK_ORDER = ['Drógówka', 'Kadet', 'Sierżant', 'Z-szef', 'Szef'];
+const MAX_AUTO_RANK = 'Z-szef'; // automatyczny awans max do Z-szef
 
-  if (!discordUserId || !fromRank || !toRank) {
-    return res.status(400).json({ success: false, message: 'discordUserId, fromRank i toRank są wymagane' });
+const getNextRank = (current) => {
+  const idx = RANK_ORDER.indexOf(current);
+  if (idx === -1) return null;
+  const next = RANK_ORDER[idx + 1];
+  if (!next) return null;
+  if (RANK_ORDER.indexOf(next) > RANK_ORDER.indexOf(MAX_AUTO_RANK)) return null;
+  return next;
+};
+
+app.post('/api/swap-roles', async (req, res) => {
+  const { discordUserId, fromRank, toRank, autoDetect } = req.body;
+
+  if (!discordUserId) {
+    return res.status(400).json({ success: false, message: 'discordUserId jest wymagany' });
   }
 
-  const fromEnv = RANK_ROLE_MAP[fromRank];
-  const toEnv   = RANK_ROLE_MAP[toRank];
+  try {
+    const guild  = await client.guilds.fetch(process.env.DISCORD_GUILD_ID);
+    const member = await guild.members.fetch(discordUserId);
+
+    let resolvedFromRank = fromRank;
+    let resolvedToRank   = toRank;
+
+    if (autoDetect) {
+      // Wykryj aktualną rangę na podstawie ról Discord
+      const allRoleIds = Object.entries(RANK_ROLE_MAP)
+        .map(([name, envKey]) => ({ name, id: process.env[envKey] }))
+        .filter((r) => r.id);
+
+      // Znajdź najwyższą pasującą rangę (unikalne env keys, szukaj od końca)
+      const uniqueRanks = RANK_ORDER.filter((r, i, arr) =>
+        arr.findIndex((x) => RANK_ROLE_MAP[x] === RANK_ROLE_MAP[r]) === i
+      );
+
+      resolvedFromRank = null;
+      for (let i = uniqueRanks.length - 1; i >= 0; i--) {
+        const roleId = process.env[RANK_ROLE_MAP[uniqueRanks[i]]];
+        if (roleId && member.roles.cache.has(roleId)) {
+          resolvedFromRank = uniqueRanks[i];
+          break;
+        }
+      }
+
+      if (!resolvedFromRank) {
+        return res.status(400).json({ success: false, message: 'Nie wykryto rangi gracza na Discordzie' });
+      }
+
+      resolvedToRank = getNextRank(resolvedFromRank);
+      if (!resolvedToRank) {
+        return res.status(400).json({ success: false, message: `Gracz ma już maksymalną rangę obsługiwaną automatycznie (${resolvedFromRank})` });
+      }
+    } else {
+      if (!resolvedFromRank || !resolvedToRank) {
+        return res.status(400).json({ success: false, message: 'discordUserId, fromRank i toRank są wymagane' });
+      }
+    }
+
+  const fromEnv = RANK_ROLE_MAP[resolvedFromRank];
+  const toEnv   = RANK_ROLE_MAP[resolvedToRank];
   const fromRoleId = fromEnv ? process.env[fromEnv] : null;
   const toRoleId   = toEnv   ? process.env[toEnv]   : null;
 
@@ -413,9 +468,6 @@ app.post('/api/swap-roles', async (req, res) => {
     return res.status(400).json({ success: false, message: 'Nieznane stopnie lub brak ID ról w .env' });
   }
 
-  try {
-    const guild  = await client.guilds.fetch(process.env.DISCORD_GUILD_ID);
-    const member = await guild.members.fetch(discordUserId);
     const errors = [];
 
     // Usuń starą rolę
@@ -424,7 +476,7 @@ app.post('/api/swap-roles', async (req, res) => {
       if (oldRole) {
         await member.roles.remove(oldRole).catch((e) => errors.push(`Usuwanie roli: ${e.message}`));
       } else {
-        errors.push(`Rola ${fromRank} (${fromRoleId}) nie istnieje na serwerze`);
+        errors.push(`Rola ${resolvedFromRank} (${fromRoleId}) nie istnieje na serwerze`);
       }
     }
 
@@ -434,14 +486,14 @@ app.post('/api/swap-roles', async (req, res) => {
       if (newRole) {
         await member.roles.add(newRole).catch((e) => errors.push(`Dodawanie roli: ${e.message}`));
       } else {
-        errors.push(`Rola ${toRank} (${toRoleId}) nie istnieje na serwerze`);
+        errors.push(`Rola ${resolvedToRank} (${toRoleId}) nie istnieje na serwerze`);
       }
     }
 
-    console.log(`🔄 Zamiana ról: ${member.user.tag} | ${fromRank} → ${toRank}${errors.length ? ` (błędy: ${errors.join(', ')})` : ''}`);
-    sendAuditLog('BOT_SWAP_ROLES', member.user.tag, `user:${discordUserId}`, { discordUserId, fromRank, toRank, errors });
+    console.log(`🔄 Zamiana ról: ${member.user.tag} | ${resolvedFromRank} → ${resolvedToRank}${errors.length ? ` (błędy: ${errors.join(', ')})` : ''}`);
+    sendAuditLog('BOT_SWAP_ROLES', member.user.tag, `user:${discordUserId}`, { discordUserId, fromRank: resolvedFromRank, toRank: resolvedToRank, errors });
 
-    res.json({ success: true, errors: errors.length ? errors : undefined });
+    res.json({ success: true, fromRank: resolvedFromRank, toRank: resolvedToRank, errors: errors.length ? errors : undefined });
   } catch (err) {
     console.error(`❌ swap-roles: ${err.message}`);
     res.status(500).json({ success: false, message: `Błąd: ${err.message}` });
