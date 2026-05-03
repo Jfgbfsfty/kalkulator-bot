@@ -1038,14 +1038,13 @@ client.on('interactionCreate', async (interaction) => {
       }
 
       const nowOn = new Date();
-      const padOn = (n) => String(n).padStart(2, '0');
-      const dateStrOn = `${padOn(nowOn.getDate())}.${padOn(nowOn.getMonth() + 1)}.${nowOn.getFullYear()} ${padOn(nowOn.getHours())}:${padOn(nowOn.getMinutes())}`;
+      const dateStrOn = nowOn.toLocaleString('pl-PL', { timeZone: 'Europe/Warsaw', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }).replace(',', '');
 
       const embed = {
         color: 0x00cc66,
         title: '🟢 Wejście na służbę',
         description: `**${user.username}** wszedł na służbę`,
-        footer: { text: `Kalkulator Mandatów | Polskie RP • Dziś o ${dateStrOn}` },
+        footer: { text: `Kalkulator Mandatów | Polskie RP • ${dateStrOn}` },
       };
 
       await interaction.editReply({ embeds: [embed] });
@@ -1119,15 +1118,14 @@ client.on('interactionCreate', async (interaction) => {
       }
 
       const now = new Date();
-      const pad = (n) => String(n).padStart(2, '0');
-      const dateStr = `${pad(now.getDate())}.${pad(now.getMonth() + 1)}.${now.getFullYear()} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
+      const dateStr = now.toLocaleString('pl-PL', { timeZone: 'Europe/Warsaw', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }).replace(',', '');
 
       const embed = {
         color: 0xff4444,
         title: '🔴 Zejście ze służby',
         description: `**${user.username}** zszedł ze służby`,
         fields,
-        footer: { text: `Kalkulator Mandatów | Polskie RP • Dziś o ${dateStr}` },
+        footer: { text: `Kalkulator Mandatów | Polskie RP • ${dateStr}` },
       };
 
       await interaction.editReply({ embeds: [embed] });
