@@ -1037,12 +1037,15 @@ client.on('interactionCreate', async (interaction) => {
         return;
       }
 
+      const nowOn = new Date();
+      const padOn = (n) => String(n).padStart(2, '0');
+      const dateStrOn = `${padOn(nowOn.getDate())}.${padOn(nowOn.getMonth() + 1)}.${nowOn.getFullYear()} ${padOn(nowOn.getHours())}:${padOn(nowOn.getMinutes())}`;
+
       const embed = {
         color: 0x00cc66,
         title: '🟢 Wejście na służbę',
         description: `**${user.username}** wszedł na służbę`,
-        timestamp: new Date().toISOString(),
-        footer: { text: 'Kalkulator Mandatów | Polskie RP' },
+        footer: { text: `Kalkulator Mandatów | Polskie RP • Dziś o ${dateStrOn}` },
       };
 
       await interaction.editReply({ embeds: [embed] });
@@ -1110,19 +1113,21 @@ client.on('interactionCreate', async (interaction) => {
 
       const fields = [
         { name: '⏱️ Czas tej zmiany', value: sessionTime, inline: true },
-        { name: '📊 Łączny czas służby', value: totalTime, inline: true },
       ];
       if (earnedStr) {
         fields.push({ name: '💰 Zarobiono', value: earnedStr, inline: true });
       }
+
+      const now = new Date();
+      const pad = (n) => String(n).padStart(2, '0');
+      const dateStr = `${pad(now.getDate())}.${pad(now.getMonth() + 1)}.${now.getFullYear()} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
 
       const embed = {
         color: 0xff4444,
         title: '🔴 Zejście ze służby',
         description: `**${user.username}** zszedł ze służby`,
         fields,
-        timestamp: new Date().toISOString(),
-        footer: { text: 'Kalkulator Mandatów | Polskie RP' },
+        footer: { text: `Kalkulator Mandatów | Polskie RP • Dziś o ${dateStr}` },
       };
 
       await interaction.editReply({ embeds: [embed] });
